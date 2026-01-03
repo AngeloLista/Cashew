@@ -12,6 +12,7 @@ import 'package:budget/pages/objectivesListPage.dart';
 import 'package:budget/pages/premiumPage.dart';
 import 'package:budget/pages/transactionsListPage.dart';
 import 'package:budget/pages/upcomingOverdueTransactionsPage.dart';
+import 'package:budget/pages/yearlySpendingComparisonPage.dart';
 import 'package:budget/struct/currencyFunctions.dart';
 import 'package:budget/struct/defaultPreferences.dart';
 import 'package:budget/struct/languageMap.dart';
@@ -290,6 +291,22 @@ class MorePages extends StatelessWidget {
                     openPage: CreditDebtTransactions(isCredit: null),
                     title: navBarIconsData["loans"]!.label.tr(),
                     icon: navBarIconsData["loans"]!.iconData,
+                    isOutlined: true,
+                  ),
+                ),
+              ],
+            ),
+          if (hasSideNavigation == false)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Expanded(
+                  child: SettingsContainerOpenPage(
+                    openPage: YearlySpendingComparisonPage(),
+                    title: "yearly-spending-comparison".tr(),
+                    icon: appStateSettings["outlinedIcons"]
+                        ? Icons.compare_arrows_outlined
+                        : Icons.compare_arrows_rounded,
                     isOutlined: true,
                   ),
                 ),
