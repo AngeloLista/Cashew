@@ -47,6 +47,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Linux build artifacts
+/linux/flutter/
+
 # Keys
 /android/key.properties
 /android/app/keystore.jks
