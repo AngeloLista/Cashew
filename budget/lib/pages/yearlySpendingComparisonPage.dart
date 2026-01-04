@@ -44,6 +44,8 @@ class _YearlySpendingComparisonPageState
   TransactionCategory? selectedParentCategory; // For subcategory drill-down
   TransactionCategory?
       selectedCategoryForTransactions; // When viewing transactions
+  bool viewingDirectParentTransactions =
+      false; // When viewing direct parent transactions
 
   @override
   void initState() {
@@ -428,6 +430,7 @@ class _YearlySpendingComparisonPageState
             sortMode: sortMode,
             selectedParentCategory: selectedParentCategory,
             selectedCategoryForTransactions: selectedCategoryForTransactions,
+            viewingDirectParentTransactions: viewingDirectParentTransactions,
             onCategorySelected: (category) {
               setState(() => selectedParentCategory = category);
             },
@@ -435,13 +438,20 @@ class _YearlySpendingComparisonPageState
               setState(() {
                 selectedParentCategory = null;
                 selectedCategoryForTransactions = null;
+                viewingDirectParentTransactions = false;
               });
             },
             onViewTransactions: (category) {
               setState(() => selectedCategoryForTransactions = category);
             },
             onBackFromTransactions: () {
-              setState(() => selectedCategoryForTransactions = null);
+              setState(() {
+                selectedCategoryForTransactions = null;
+                viewingDirectParentTransactions = false;
+              });
+            },
+            onViewDirectParentTransactions: () {
+              setState(() => viewingDirectParentTransactions = true);
             },
           ),
         ),
@@ -533,10 +543,12 @@ class _ComparisonContent extends StatelessWidget {
     required this.sortMode,
     required this.selectedParentCategory,
     required this.selectedCategoryForTransactions,
+    required this.viewingDirectParentTransactions,
     required this.onCategorySelected,
     required this.onBackToMainCategories,
     required this.onViewTransactions,
     required this.onBackFromTransactions,
+    required this.onViewDirectParentTransactions,
   });
 
   final int yearX;
@@ -549,10 +561,12 @@ class _ComparisonContent extends StatelessWidget {
   final int sortMode; // 0=total, 1=biggest decrease, 2=biggest increase
   final TransactionCategory? selectedParentCategory;
   final TransactionCategory? selectedCategoryForTransactions;
+  final bool viewingDirectParentTransactions;
   final Function(TransactionCategory) onCategorySelected;
   final VoidCallback onBackToMainCategories;
   final Function(TransactionCategory) onViewTransactions;
   final VoidCallback onBackFromTransactions;
+  final VoidCallback onViewDirectParentTransactions;
 
   DateTime getYearStart(int year) => DateTime(year, 1, 1);
   DateTime getYearEnd(int year) => DateTime(year, 12, 31, 23, 59, 59);
@@ -687,11 +701,44 @@ class _ComparisonContent extends StatelessWidget {
                       filteredDataY.fold(0.0, (sum, c) => sum + c.total.abs());
                 }
 
+                // Calculate subcategory totals if viewing a subcategory's transactions
+                double subcategoryTotalX = 0.0;
+                double subcategoryTotalY = 0.0;
+                bool isViewingSubcategoryTransactions =
+                    selectedCategoryForTransactions != null &&
+                        selectedCategoryForTransactions!.mainCategoryPk != null;
+
+                if (isViewingSubcategoryTransactions) {
+                  var subcatDataX = dataX
+                      .where((c) =>
+                          c.category.categoryPk ==
+                          selectedCategoryForTransactions!.categoryPk)
+                      .toList();
+                  var subcatDataY = dataY
+                      .where((c) =>
+                          c.category.categoryPk ==
+                          selectedCategoryForTransactions!.categoryPk)
+                      .toList();
+                  subcategoryTotalX = subcatDataX.isNotEmpty
+                      ? subcatDataX.first.total.abs()
+                      : 0.0;
+                  subcategoryTotalY = subcatDataY.isNotEmpty
+                      ? subcatDataY.first.total.abs()
+                      : 0.0;
+                }
+
                 // Apply monthly average if enabled
-                double displayTotalX =
-                    useMonthlyAverage ? totalX / monthsX : totalX;
-                double displayTotalY =
-                    useMonthlyAverage ? totalY / monthsY : totalY;
+                // Use subcategory totals if viewing subcategory transactions
+                double displayTotalX = isViewingSubcategoryTransactions
+                    ? (useMonthlyAverage
+                        ? subcategoryTotalX / monthsX
+                        : subcategoryTotalX)
+                    : (useMonthlyAverage ? totalX / monthsX : totalX);
+                double displayTotalY = isViewingSubcategoryTransactions
+                    ? (useMonthlyAverage
+                        ? subcategoryTotalY / monthsY
+                        : subcategoryTotalY)
+                    : (useMonthlyAverage ? totalY / monthsY : totalY);
 
                 // Merge categories from both years
                 Map<String, _ComparisonData> categoryComparisons = {};
@@ -758,7 +805,7 @@ class _ComparisonContent extends StatelessWidget {
                   padding: EdgeInsetsDirectional.symmetric(horizontal: 13),
                   child: Column(
                     children: [
-                      // Back button when viewing subcategories
+                      // Breadcrumb navigation when viewing subcategories or transactions
                       if (isViewingSubcategories)
                         Padding(
                           padding: EdgeInsetsDirectional.only(bottom: 10),
@@ -773,13 +820,22 @@ class _ComparisonContent extends StatelessWidget {
                                   horizontal: 12, vertical: 10),
                               child: Row(
                                 children: [
-                                  Icon(Icons.arrow_back_rounded, size: 20),
+                                  Icon(
+                                    Icons.arrow_back_rounded,
+                                    size: 20,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSecondaryContainer,
+                                  ),
                                   SizedBox(width: 8),
                                   Expanded(
                                     child: TextFont(
                                       text: "all-categories".tr(),
                                       fontSize: 14,
                                       fontWeight: FontWeight.w500,
+                                      textColor: Theme.of(context)
+                                          .colorScheme
+                                          .onSecondaryContainer,
                                     ),
                                   ),
                                 ],
@@ -787,21 +843,88 @@ class _ComparisonContent extends StatelessWidget {
                             ),
                           ),
                         ),
-                      // Summary card - shows parent category when viewing subcategories
-                      _SummaryCard(
-                        title: isViewingSubcategories
-                            ? selectedParentCategory!.name
-                            : (useMonthlyAverage
-                                ? "monthly-average".tr()
-                                : "total".tr()),
-                        amountX: displayTotalX,
-                        amountY: displayTotalY,
-                        yearX: yearX,
-                        yearY: yearY,
-                        isIncomeMode: isIncome == true,
-                        monthsX: useMonthlyAverage ? monthsX : null,
-                        monthsY: useMonthlyAverage ? monthsY : null,
-                      ),
+                      // Summary card with stacked parent tab when viewing subcategory transactions
+                      if (isViewingSubcategoryTransactions ||
+                          viewingDirectParentTransactions)
+                        // Stacked cards: parent tab behind, subcategory card in front
+                        Stack(
+                          children: [
+                            // Parent category card (background) - tappable to go back
+                            // This extends behind the child card
+                            Tappable(
+                              onTap: onBackFromTransactions,
+                              borderRadius: 15,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .outline
+                                  .withOpacity(0.15),
+                              child: Container(
+                                width: double.infinity,
+                                padding: EdgeInsetsDirectional.only(
+                                  start: 16,
+                                  end: 16,
+                                  top: 12,
+                                  bottom:
+                                      60, // Extend below to peek behind child card
+                                ),
+                                child: Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    TextFont(
+                                      text: selectedParentCategory!.name,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      textColor: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant,
+                                    ),
+                                    Icon(
+                                      Icons.keyboard_return_rounded,
+                                      size: 18,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant
+                                          .withOpacity(0.7),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            // Subcategory summary card (foreground) - overlaps parent
+                            Padding(
+                              padding: EdgeInsetsDirectional.only(top: 38),
+                              child: _SummaryCard(
+                                title: viewingDirectParentTransactions
+                                    ? "transactions-without-subcategory".tr()
+                                    : selectedCategoryForTransactions!.name,
+                                amountX: displayTotalX,
+                                amountY: displayTotalY,
+                                yearX: yearX,
+                                yearY: yearY,
+                                isIncomeMode: isIncome == true,
+                                monthsX: useMonthlyAverage ? monthsX : null,
+                                monthsY: useMonthlyAverage ? monthsY : null,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        // Regular summary card (no stacking)
+                        _SummaryCard(
+                          title: isViewingSubcategories
+                              ? selectedParentCategory!.name
+                              : (useMonthlyAverage
+                                  ? "monthly-average".tr()
+                                  : "total".tr()),
+                          amountX: displayTotalX,
+                          amountY: displayTotalY,
+                          yearX: yearX,
+                          yearY: yearY,
+                          isIncomeMode: isIncome == true,
+                          monthsX: useMonthlyAverage ? monthsX : null,
+                          monthsY: useMonthlyAverage ? monthsY : null,
+                        ),
                       SizedBox(height: 15),
                       // Show transactions when viewing a specific category
                       if (selectedCategoryForTransactions != null)
@@ -813,11 +936,17 @@ class _ComparisonContent extends StatelessWidget {
                           walletPks: walletPks,
                           isIncome: isIncome,
                           onBack: onBackFromTransactions,
+                          isSubcategory:
+                              selectedCategoryForTransactions!.mainCategoryPk !=
+                                  null,
+                          parentCategoryPk:
+                              selectedCategoryForTransactions!.mainCategoryPk,
                         ),
                       // Show transactions for parent category without subcategories
                       if (isViewingSubcategories &&
                           sortedCategories.isEmpty &&
-                          selectedCategoryForTransactions == null)
+                          selectedCategoryForTransactions == null &&
+                          !viewingDirectParentTransactions)
                         _CategoryTransactionsList(
                           categoryPk: selectedParentCategory!.categoryPk,
                           yearX: yearX,
@@ -825,9 +954,12 @@ class _ComparisonContent extends StatelessWidget {
                           walletPks: walletPks,
                           isIncome: isIncome,
                           onBack: onBackToMainCategories,
+                          isSubcategory: false,
+                          parentCategoryPk: null,
                         ),
                       // Category/subcategory list (only if not viewing transactions)
-                      if (selectedCategoryForTransactions == null)
+                      if (selectedCategoryForTransactions == null &&
+                          !viewingDirectParentTransactions)
                         ...sortedCategories
                             .map((data) => _CategoryComparisonRow(
                                   category: data.category,
@@ -843,6 +975,33 @@ class _ComparisonContent extends StatelessWidget {
                                       : () => onCategorySelected(data.category),
                                 ))
                             .toList(),
+                      // Direct parent transactions chip (show when viewing subcategories, not viewing other transactions)
+                      if (isViewingSubcategories &&
+                          sortedCategories.isNotEmpty &&
+                          selectedCategoryForTransactions == null &&
+                          !viewingDirectParentTransactions)
+                        _DirectParentTransactionsChip(
+                          parentCategoryPk: selectedParentCategory!.categoryPk,
+                          yearX: yearX,
+                          yearY: yearY,
+                          walletPks: walletPks,
+                          isIncome: isIncome,
+                          onTap: onViewDirectParentTransactions,
+                        ),
+                      // Show direct parent transactions when selected
+                      if (viewingDirectParentTransactions &&
+                          isViewingSubcategories)
+                        _CategoryTransactionsList(
+                          categoryPk: selectedParentCategory!.categoryPk,
+                          yearX: yearX,
+                          yearY: yearY,
+                          walletPks: walletPks,
+                          isIncome: isIncome,
+                          onBack: onBackFromTransactions,
+                          isSubcategory: false,
+                          parentCategoryPk: null,
+                          filterDirectParentOnly: true,
+                        ),
                     ],
                   ),
                 );
@@ -867,6 +1026,99 @@ class _ComparisonData {
   });
 }
 
+// Widget to show a chip when there are transactions directly on the parent category
+class _DirectParentTransactionsChip extends StatelessWidget {
+  const _DirectParentTransactionsChip({
+    required this.parentCategoryPk,
+    required this.yearX,
+    required this.yearY,
+    required this.walletPks,
+    required this.isIncome,
+    required this.onTap,
+  });
+
+  final String parentCategoryPk;
+  final int yearX;
+  final int yearY;
+  final List<String>? walletPks;
+  final bool? isIncome;
+  final VoidCallback onTap;
+
+  DateTime getYearStart(int year) => DateTime(year, 1, 1);
+  DateTime getYearEnd(int year) => DateTime(year, 12, 31, 23, 59, 59);
+
+  @override
+  Widget build(BuildContext context) {
+    // Query transactions for yearX
+    return StreamBuilder<List<Transaction>>(
+      stream: database.getTransactionsInTimeRangeFromCategories(
+        getYearStart(yearX),
+        getYearEnd(yearY), // Use full range from yearX to yearY
+        [parentCategoryPk],
+        null,
+        true,
+        isIncome,
+        null,
+        null,
+        walletPks: walletPks,
+      ),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return SizedBox.shrink();
+        }
+
+        // Filter transactions without subcategory
+        final directTransactions =
+            snapshot.data!.where((t) => t.subCategoryFk == null).toList();
+
+        if (directTransactions.isEmpty) {
+          return SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: EdgeInsetsDirectional.only(top: 10),
+          child: Tappable(
+            onTap: onTap,
+            borderRadius: 10,
+            color: Theme.of(context)
+                .colorScheme
+                .tertiaryContainer
+                .withOpacity(0.6),
+            child: Padding(
+              padding:
+                  EdgeInsetsDirectional.symmetric(horizontal: 14, vertical: 12),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.receipt_long_rounded,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onTertiaryContainer,
+                  ),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: TextFont(
+                      text: "${directTransactions.length} " +
+                          "transactions-without-subcategory".tr(),
+                      fontSize: 13,
+                      textColor:
+                          Theme.of(context).colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.onTertiaryContainer,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 // Widget to show transactions for a category in the comparison view
 class _CategoryTransactionsList extends StatefulWidget {
   const _CategoryTransactionsList({
@@ -876,6 +1128,10 @@ class _CategoryTransactionsList extends StatefulWidget {
     required this.walletPks,
     required this.isIncome,
     required this.onBack,
+    this.isSubcategory = false,
+    this.parentCategoryPk,
+    this.filterDirectParentOnly =
+        false, // Filter for transactions without subcategory
   });
 
   final String categoryPk;
@@ -884,6 +1140,9 @@ class _CategoryTransactionsList extends StatefulWidget {
   final List<String>? walletPks;
   final bool? isIncome;
   final VoidCallback onBack;
+  final bool isSubcategory;
+  final String? parentCategoryPk;
+  final bool filterDirectParentOnly;
 
   @override
   State<_CategoryTransactionsList> createState() =>
@@ -895,6 +1154,7 @@ class _CategoryTransactionsListState extends State<_CategoryTransactionsList> {
   static const int loadMoreStep = 30;
   int visibleCount = initialLimit;
   late int selectedYear;
+  bool sortByAmount = false; // false = by date, true = by amount
 
   @override
   void initState() {
@@ -910,33 +1170,7 @@ class _CategoryTransactionsListState extends State<_CategoryTransactionsList> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Back button
-        Padding(
-          padding: EdgeInsetsDirectional.only(bottom: 10),
-          child: Tappable(
-            onTap: widget.onBack,
-            borderRadius: 10,
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            child: Padding(
-              padding:
-                  EdgeInsetsDirectional.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Icon(Icons.arrow_back_rounded, size: 20),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: TextFont(
-                      text: "back".tr(),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        // Year tabs
+        // Year tabs with sort toggle
         Row(
           children: [
             Expanded(
@@ -964,15 +1198,53 @@ class _CategoryTransactionsListState extends State<_CategoryTransactionsList> {
                 },
               ),
             ),
+            SizedBox(width: 8),
+            // Sort toggle button
+            Tappable(
+              onTap: () {
+                setState(() {
+                  sortByAmount = !sortByAmount;
+                });
+              },
+              borderRadius: 20,
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: Padding(
+                padding: EdgeInsetsDirectional.symmetric(
+                    horizontal: 12, vertical: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      sortByAmount
+                          ? Icons.attach_money_rounded
+                          : Icons.access_time_rounded,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                    SizedBox(width: 4),
+                    TextFont(
+                      text: sortByAmount ? "amount".tr() : "date".tr(),
+                      fontSize: 12,
+                      textColor:
+                          Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
         SizedBox(height: 15),
         // Transaction list for selected year
+        // For subcategories: query by parent category, then filter by subCategoryFk
+        // For parent categories: query directly by categoryFk
         StreamBuilder<List<Transaction>>(
           stream: database.getTransactionsInTimeRangeFromCategories(
             startDate,
             endDate,
-            [widget.categoryPk], // categoryFks
+            widget.isSubcategory && widget.parentCategoryPk != null
+                ? [widget.parentCategoryPk!]
+                : [widget.categoryPk], // categoryFks
             null, // categoryFksExclude
             true, // isPaidOnly
             widget.isIncome,
@@ -989,6 +1261,28 @@ class _CategoryTransactionsListState extends State<_CategoryTransactionsList> {
             }
 
             List<Transaction> transactions = snapshot.data!;
+
+            // For subcategories, filter by subCategoryFk
+            if (widget.isSubcategory) {
+              transactions = transactions
+                  .where((t) => t.subCategoryFk == widget.categoryPk)
+                  .toList();
+            }
+
+            // For direct parent transactions, filter where subCategoryFk is null
+            if (widget.filterDirectParentOnly) {
+              transactions =
+                  transactions.where((t) => t.subCategoryFk == null).toList();
+            }
+
+            // Sort by amount or date descending
+            if (sortByAmount) {
+              transactions
+                  .sort((a, b) => b.amount.abs().compareTo(a.amount.abs()));
+            } else {
+              transactions
+                  .sort((a, b) => b.dateCreated.compareTo(a.dateCreated));
+            }
             if (transactions.isEmpty) {
               return Padding(
                 padding: EdgeInsetsDirectional.all(20),
@@ -1078,7 +1372,7 @@ class _SummaryCard extends StatelessWidget {
     return Container(
       padding: EdgeInsetsDirectional.all(20),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
+        color: Theme.of(context).colorScheme.secondaryContainer,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
