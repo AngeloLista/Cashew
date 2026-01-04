@@ -51,8 +51,14 @@ class _YearlySpendingComparisonPageState
   void initState() {
     super.initState();
     final now = DateTime.now();
-    yearY = now.year;
-    yearX = now.year - 1;
+    // Load persisted years or default
+    yearX = appStateSettings["yearlyComparisonYearX"]?.toInt() ?? now.year - 1;
+    yearY = appStateSettings["yearlyComparisonYearY"]?.toInt() ?? now.year;
+    // Load persisted wallets
+    if (appStateSettings["yearlyComparisonWallets"] != null) {
+      selectedWalletPks =
+          List<String>.from(appStateSettings["yearlyComparisonWallets"]);
+    }
   }
 
   DateTime getYearStart(int year) => DateTime(year, 1, 1);
@@ -141,7 +147,13 @@ class _YearlySpendingComparisonPageState
                             setState(() {
                               if (selectedWalletPks == null) {
                                 // First selection - switch from "all" to specific
-                                selectedWalletPks = [wallet.walletPk];
+                                // Logic: If "All" are selected (null), and user clicks one (e.g., Y),
+                                // it means they want to toggle Y OFF.
+                                // So we select ONLY the others (All - Y).
+                                selectedWalletPks = wallets
+                                    .map((w) => w.walletPk)
+                                    .where((pk) => pk != wallet.walletPk)
+                                    .toList();
                               } else if (selectedWalletPks!
                                   .contains(wallet.walletPk)) {
                                 selectedWalletPks!.remove(wallet.walletPk);
@@ -152,6 +164,9 @@ class _YearlySpendingComparisonPageState
                                 selectedWalletPks!.add(wallet.walletPk);
                               }
                             });
+                            updateSettings(
+                                "yearlyComparisonWallets", selectedWalletPks,
+                                updateGlobalState: false);
                           });
                         },
                         borderRadius: 10,
@@ -191,6 +206,9 @@ class _YearlySpendingComparisonPageState
                         setState(() {
                           selectedWalletPks = null;
                         });
+                        updateSettings(
+                            "yearlyComparisonWallets", selectedWalletPks,
+                            updateGlobalState: false);
                         popRoute(context);
                       },
                       color: Theme.of(context).colorScheme.tertiaryContainer,
@@ -220,8 +238,12 @@ class _YearlySpendingComparisonPageState
       setState(() {
         if (isYearX) {
           yearX = picked.year;
+          updateSettings("yearlyComparisonYearX", yearX,
+              updateGlobalState: false);
         } else {
           yearY = picked.year;
+          updateSettings("yearlyComparisonYearY", yearY,
+              updateGlobalState: false);
         }
       });
     }
@@ -1372,7 +1394,7 @@ class _SummaryCard extends StatelessWidget {
     return Container(
       padding: EdgeInsetsDirectional.all(20),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.secondaryContainer,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
