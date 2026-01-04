@@ -21,6 +21,8 @@ import 'package:budget/widgets/viewAllTransactionsButton.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:async/async.dart' show StreamZip;
 
 class YearlySpendingComparisonPage extends StatefulWidget {
   const YearlySpendingComparisonPage({super.key});
@@ -39,7 +41,7 @@ class _YearlySpendingComparisonPageState
   List<String> excludedCategoryFks = [
     "0"
   ]; // Exclude balance correction by default
-  bool useMonthlyAverage = false;
+  int viewMode = 0; // 0=Total, 1=Monthly Average, 2=Chart
   int sortMode = 0; // 0=total, 1=biggest decrease, 2=biggest increase
   TransactionCategory? selectedParentCategory; // For subcategory drill-down
   TransactionCategory?
@@ -371,21 +373,32 @@ class _YearlySpendingComparisonPageState
             child: Row(
               children: [
                 // Total / Monthly Average toggle
+                // Display Mode Selector (Total / Average / Chart)
                 Expanded(
-                  child: Row(
-                    children: [
-                      _ToggleChip(
-                        label: "total".tr(),
-                        isSelected: !useMonthlyAverage,
-                        onTap: () => setState(() => useMonthlyAverage = false),
-                      ),
-                      SizedBox(width: 8),
-                      _ToggleChip(
-                        label: "monthly-average".tr(),
-                        isSelected: useMonthlyAverage,
-                        onTap: () => setState(() => useMonthlyAverage = true),
-                      ),
-                    ],
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _ToggleChip(
+                          label: "total".tr(),
+                          isSelected: viewMode == 0,
+                          onTap: () => setState(() => viewMode = 0),
+                        ),
+                        SizedBox(width: 8),
+                        _ToggleChip(
+                          label: "monthly-average".tr(),
+                          isSelected: viewMode == 1,
+                          onTap: () => setState(() => viewMode = 1),
+                        ),
+                        SizedBox(width: 8),
+                        _ToggleChip(
+                          label: "chart"
+                              .tr(), // Ensure translation key exists or use "Chart"
+                          isSelected: viewMode == 2,
+                          onTap: () => setState(() => viewMode = 2),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 // Sort selector
@@ -448,7 +461,8 @@ class _YearlySpendingComparisonPageState
             isIncome: isIncome,
             walletPks: selectedWalletPks,
             excludedCategoryFks: excludedCategoryFks,
-            useMonthlyAverage: useMonthlyAverage,
+            useMonthlyAverage: viewMode == 1,
+            viewMode: viewMode,
             sortMode: sortMode,
             selectedParentCategory: selectedParentCategory,
             selectedCategoryForTransactions: selectedCategoryForTransactions,
@@ -562,6 +576,7 @@ class _ComparisonContent extends StatelessWidget {
     required this.walletPks,
     required this.excludedCategoryFks,
     required this.useMonthlyAverage,
+    required this.viewMode,
     required this.sortMode,
     required this.selectedParentCategory,
     required this.selectedCategoryForTransactions,
@@ -580,6 +595,7 @@ class _ComparisonContent extends StatelessWidget {
   final List<String>? walletPks;
   final List<String> excludedCategoryFks;
   final bool useMonthlyAverage;
+  final int viewMode;
   final int sortMode; // 0=total, 1=biggest decrease, 2=biggest increase
   final TransactionCategory? selectedParentCategory;
   final TransactionCategory? selectedCategoryForTransactions;
@@ -827,202 +843,236 @@ class _ComparisonContent extends StatelessWidget {
                   padding: EdgeInsetsDirectional.symmetric(horizontal: 13),
                   child: Column(
                     children: [
-                      // Breadcrumb navigation when viewing subcategories or transactions
-                      if (isViewingSubcategories)
+                      // Comparison Chart (Exclusive View)
+                      if (viewMode == 2)
                         Padding(
-                          padding: EdgeInsetsDirectional.only(bottom: 10),
-                          child: Tappable(
-                            onTap: onBackToMainCategories,
-                            borderRadius: 10,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .secondaryContainer,
-                            child: Padding(
-                              padding: EdgeInsetsDirectional.symmetric(
-                                  horizontal: 12, vertical: 10),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.arrow_back_rounded,
-                                    size: 20,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSecondaryContainer,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: TextFont(
-                                      text: "all-categories".tr(),
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                      textColor: Theme.of(context)
-                                          .colorScheme
-                                          .onSecondaryContainer,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                          padding: const EdgeInsetsDirectional.only(bottom: 25),
+                          child: _ComparisonChart(
+                            yearX: yearX,
+                            yearY: yearY,
+                            isIncome: isIncome,
+                            walletPks: walletPks,
+                            excludedCategoryFks: excludedCategoryFks,
+                            parentCategoryPk:
+                                selectedParentCategory?.categoryPk,
+                            subCategoryPk:
+                                selectedCategoryForTransactions?.categoryPk,
+                            viewingDirectParentTransactions:
+                                viewingDirectParentTransactions,
                           ),
                         ),
-                      // Summary card with stacked parent tab when viewing subcategory transactions
-                      if (isViewingSubcategoryTransactions ||
-                          viewingDirectParentTransactions)
-                        // Stacked cards: parent tab behind, subcategory card in front
-                        Stack(
+
+                      // List/Summary Content (Hidden if Chart Mode)
+                      if (viewMode != 2)
+                        Column(
                           children: [
-                            // Parent category card (background) - tappable to go back
-                            // This extends behind the child card
-                            Tappable(
-                              onTap: onBackFromTransactions,
-                              borderRadius: 15,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .outline
-                                  .withOpacity(0.15),
-                              child: Container(
-                                width: double.infinity,
-                                padding: EdgeInsetsDirectional.only(
-                                  start: 16,
-                                  end: 16,
-                                  top: 12,
-                                  bottom:
-                                      60, // Extend below to peek behind child card
-                                ),
-                                child: Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    TextFont(
-                                      text: selectedParentCategory!.name,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      textColor: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant,
+                            //Breadcrumb...
+                            if (isViewingSubcategories)
+                              Padding(
+                                padding: EdgeInsetsDirectional.only(bottom: 10),
+                                child: Tappable(
+                                  onTap: onBackToMainCategories,
+                                  borderRadius: 10,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .secondaryContainer,
+                                  child: Padding(
+                                    padding: EdgeInsetsDirectional.symmetric(
+                                        horizontal: 12, vertical: 10),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.arrow_back_rounded,
+                                          size: 20,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSecondaryContainer,
+                                        ),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: TextFont(
+                                            text: "all-categories".tr(),
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w500,
+                                            textColor: Theme.of(context)
+                                                .colorScheme
+                                                .onSecondaryContainer,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    Icon(
-                                      Icons.keyboard_return_rounded,
-                                      size: 18,
+                                  ),
+                                ),
+                              ),
+
+                            // Summary Card logic
+                            ...[
+                              if (isViewingSubcategoryTransactions ||
+                                  viewingDirectParentTransactions)
+                                Stack(
+                                  children: [
+                                    Tappable(
+                                      onTap: onBackFromTransactions,
+                                      borderRadius: 15,
                                       color: Theme.of(context)
                                           .colorScheme
-                                          .onSurfaceVariant
-                                          .withOpacity(0.7),
+                                          .outline
+                                          .withOpacity(0.15),
+                                      child: Container(
+                                        width: double.infinity,
+                                        padding: EdgeInsetsDirectional.only(
+                                          start: 16,
+                                          end: 16,
+                                          top: 12,
+                                          bottom: 60,
+                                        ),
+                                        child: Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            TextFont(
+                                              text:
+                                                  selectedParentCategory!.name,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              textColor: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                            Icon(
+                                              Icons.keyboard_return_rounded,
+                                              size: 18,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant
+                                                  .withOpacity(0.7),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding:
+                                          EdgeInsetsDirectional.only(top: 38),
+                                      child: _SummaryCard(
+                                        title: viewingDirectParentTransactions
+                                            ? "transactions-without-subcategory"
+                                                .tr()
+                                            : selectedCategoryForTransactions!
+                                                .name,
+                                        amountX: displayTotalX,
+                                        amountY: displayTotalY,
+                                        yearX: yearX,
+                                        yearY: yearY,
+                                        isIncomeMode: isIncome == true,
+                                        monthsX:
+                                            useMonthlyAverage ? monthsX : null,
+                                        monthsY:
+                                            useMonthlyAverage ? monthsY : null,
+                                      ),
                                     ),
                                   ],
-                                ),
-                              ),
-                            ),
-                            // Subcategory summary card (foreground) - overlaps parent
-                            Padding(
-                              padding: EdgeInsetsDirectional.only(top: 38),
-                              child: _SummaryCard(
-                                title: viewingDirectParentTransactions
-                                    ? "transactions-without-subcategory".tr()
-                                    : selectedCategoryForTransactions!.name,
-                                amountX: displayTotalX,
-                                amountY: displayTotalY,
-                                yearX: yearX,
-                                yearY: yearY,
-                                isIncomeMode: isIncome == true,
-                                monthsX: useMonthlyAverage ? monthsX : null,
-                                monthsY: useMonthlyAverage ? monthsY : null,
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        // Regular summary card (no stacking)
-                        _SummaryCard(
-                          title: isViewingSubcategories
-                              ? selectedParentCategory!.name
-                              : (useMonthlyAverage
-                                  ? "monthly-average".tr()
-                                  : "total".tr()),
-                          amountX: displayTotalX,
-                          amountY: displayTotalY,
-                          yearX: yearX,
-                          yearY: yearY,
-                          isIncomeMode: isIncome == true,
-                          monthsX: useMonthlyAverage ? monthsX : null,
-                          monthsY: useMonthlyAverage ? monthsY : null,
-                        ),
-                      SizedBox(height: 15),
-                      // Show transactions when viewing a specific category
-                      if (selectedCategoryForTransactions != null)
-                        _CategoryTransactionsList(
-                          categoryPk:
-                              selectedCategoryForTransactions!.categoryPk,
-                          yearX: yearX,
-                          yearY: yearY,
-                          walletPks: walletPks,
-                          isIncome: isIncome,
-                          onBack: onBackFromTransactions,
-                          isSubcategory:
-                              selectedCategoryForTransactions!.mainCategoryPk !=
-                                  null,
-                          parentCategoryPk:
-                              selectedCategoryForTransactions!.mainCategoryPk,
-                        ),
-                      // Show transactions for parent category without subcategories
-                      if (isViewingSubcategories &&
-                          sortedCategories.isEmpty &&
-                          selectedCategoryForTransactions == null &&
-                          !viewingDirectParentTransactions)
-                        _CategoryTransactionsList(
-                          categoryPk: selectedParentCategory!.categoryPk,
-                          yearX: yearX,
-                          yearY: yearY,
-                          walletPks: walletPks,
-                          isIncome: isIncome,
-                          onBack: onBackToMainCategories,
-                          isSubcategory: false,
-                          parentCategoryPk: null,
-                        ),
-                      // Category/subcategory list (only if not viewing transactions)
-                      if (selectedCategoryForTransactions == null &&
-                          !viewingDirectParentTransactions)
-                        ...sortedCategories
-                            .map((data) => _CategoryComparisonRow(
-                                  category: data.category,
-                                  amountX: data.amountX,
-                                  amountY: data.amountY,
+                                )
+                              else
+                                _SummaryCard(
+                                  title: isViewingSubcategories
+                                      ? selectedParentCategory!.name
+                                      : (useMonthlyAverage
+                                          ? "monthly-average".tr()
+                                          : "total".tr()),
+                                  amountX: displayTotalX,
+                                  amountY: displayTotalY,
                                   yearX: yearX,
                                   yearY: yearY,
                                   isIncomeMode: isIncome == true,
-                                  // Parent categories: drill into subcategories
-                                  // Subcategories: show transactions
-                                  onTap: isViewingSubcategories
-                                      ? () => onViewTransactions(data.category)
-                                      : () => onCategorySelected(data.category),
-                                ))
-                            .toList(),
-                      // Direct parent transactions chip (show when viewing subcategories, not viewing other transactions)
-                      if (isViewingSubcategories &&
-                          sortedCategories.isNotEmpty &&
-                          selectedCategoryForTransactions == null &&
-                          !viewingDirectParentTransactions)
-                        _DirectParentTransactionsChip(
-                          parentCategoryPk: selectedParentCategory!.categoryPk,
-                          yearX: yearX,
-                          yearY: yearY,
-                          walletPks: walletPks,
-                          isIncome: isIncome,
-                          onTap: onViewDirectParentTransactions,
-                        ),
-                      // Show direct parent transactions when selected
-                      if (viewingDirectParentTransactions &&
-                          isViewingSubcategories)
-                        _CategoryTransactionsList(
-                          categoryPk: selectedParentCategory!.categoryPk,
-                          yearX: yearX,
-                          yearY: yearY,
-                          walletPks: walletPks,
-                          isIncome: isIncome,
-                          onBack: onBackFromTransactions,
-                          isSubcategory: false,
-                          parentCategoryPk: null,
-                          filterDirectParentOnly: true,
+                                  monthsX: useMonthlyAverage ? monthsX : null,
+                                  monthsY: useMonthlyAverage ? monthsY : null,
+                                ),
+                            ],
+                            SizedBox(height: 15),
+
+                            // Transactions List
+                            if (selectedCategoryForTransactions != null)
+                              _CategoryTransactionsList(
+                                categoryPk:
+                                    selectedCategoryForTransactions!.categoryPk,
+                                yearX: yearX,
+                                yearY: yearY,
+                                walletPks: walletPks,
+                                isIncome: isIncome,
+                                onBack: onBackFromTransactions,
+                                isSubcategory: selectedCategoryForTransactions!
+                                        .mainCategoryPk !=
+                                    null,
+                                parentCategoryPk:
+                                    selectedCategoryForTransactions!
+                                        .mainCategoryPk,
+                              ),
+
+                            // Parent Transactions (no subcat)
+                            if (isViewingSubcategories &&
+                                sortedCategories.isEmpty &&
+                                selectedCategoryForTransactions == null &&
+                                !viewingDirectParentTransactions)
+                              _CategoryTransactionsList(
+                                categoryPk: selectedParentCategory!.categoryPk,
+                                yearX: yearX,
+                                yearY: yearY,
+                                walletPks: walletPks,
+                                isIncome: isIncome,
+                                onBack: onBackToMainCategories,
+                                isSubcategory: false,
+                                parentCategoryPk: null,
+                              ),
+
+                            // Category Rows
+                            if (selectedCategoryForTransactions == null &&
+                                !viewingDirectParentTransactions)
+                              ...sortedCategories.map((data) =>
+                                  _CategoryComparisonRow(
+                                    category: data.category,
+                                    amountX: data.amountX,
+                                    amountY: data.amountY,
+                                    yearX: yearX,
+                                    yearY: yearY,
+                                    isIncomeMode: isIncome == true,
+                                    onTap: isViewingSubcategories
+                                        ? () =>
+                                            onViewTransactions(data.category)
+                                        : () =>
+                                            onCategorySelected(data.category),
+                                  )),
+
+                            // Direct Parent Chip
+                            if (isViewingSubcategories &&
+                                sortedCategories.isNotEmpty &&
+                                selectedCategoryForTransactions == null &&
+                                !viewingDirectParentTransactions)
+                              _DirectParentTransactionsChip(
+                                parentCategoryPk:
+                                    selectedParentCategory!.categoryPk,
+                                yearX: yearX,
+                                yearY: yearY,
+                                walletPks: walletPks,
+                                isIncome: isIncome,
+                                onTap: onViewDirectParentTransactions,
+                              ),
+
+                            // Direct Parent Transactions View
+                            if (viewingDirectParentTransactions &&
+                                isViewingSubcategories)
+                              _CategoryTransactionsList(
+                                categoryPk: selectedParentCategory!.categoryPk,
+                                yearX: yearX,
+                                yearY: yearY,
+                                walletPks: walletPks,
+                                isIncome: isIncome,
+                                onBack: onBackFromTransactions,
+                                isSubcategory: false,
+                                parentCategoryPk: null,
+                                filterDirectParentOnly: true,
+                              ),
+                          ],
                         ),
                     ],
                   ),
@@ -1046,6 +1096,248 @@ class _ComparisonData {
     required this.amountX,
     required this.amountY,
   });
+}
+
+class _ComparisonChart extends StatelessWidget {
+  const _ComparisonChart({
+    required this.yearX,
+    required this.yearY,
+    required this.isIncome,
+    required this.walletPks,
+    required this.excludedCategoryFks,
+    this.parentCategoryPk,
+    this.subCategoryPk,
+    this.viewingDirectParentTransactions = false,
+  });
+
+  final int yearX;
+  final int yearY;
+  final bool? isIncome;
+  final List<String>? walletPks;
+  final List<String> excludedCategoryFks;
+  final String? parentCategoryPk;
+  final String? subCategoryPk;
+  final bool viewingDirectParentTransactions;
+
+  DateTime getYearStart(int year) => DateTime(year, 1, 1);
+  DateTime getYearEnd(int year) => DateTime(year, 12, 31, 23, 59, 59);
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<List<Transaction>>>(
+      stream: StreamZip([
+        database.getTransactionsInTimeRangeFromCategories(
+          getYearStart(yearX),
+          getYearEnd(yearX),
+          parentCategoryPk != null ? [parentCategoryPk!] : null,
+          excludedCategoryFks.isEmpty ? null : excludedCategoryFks,
+          true,
+          isIncome,
+          null,
+          null,
+          walletPks: walletPks,
+        ),
+        database.getTransactionsInTimeRangeFromCategories(
+          getYearStart(yearY),
+          getYearEnd(yearY),
+          parentCategoryPk != null ? [parentCategoryPk!] : null,
+          excludedCategoryFks.isEmpty ? null : excludedCategoryFks,
+          true,
+          isIncome,
+          null,
+          null,
+          walletPks: walletPks,
+        ),
+      ]),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return SizedBox.shrink();
+
+        final transactionsX = snapshot.data![0];
+        final transactionsY = snapshot.data![1];
+
+        // Filter locally for subcategory or direct parent transactions
+        bool filter(Transaction t) {
+          if (viewingDirectParentTransactions) return t.subCategoryFk == null;
+          if (subCategoryPk != null) return t.subCategoryFk == subCategoryPk;
+          return true;
+        }
+
+        final filteredX = transactionsX.where(filter).toList();
+        final filteredY = transactionsY.where(filter).toList();
+
+        // Aggregate by month (0-11)
+        final List<double> monthlyX = List.filled(12, 0.0);
+        final List<double> monthlyY = List.filled(12, 0.0);
+
+        for (var t in filteredX)
+          monthlyX[t.dateCreated.month - 1] += t.amount.abs();
+        for (var t in filteredY)
+          monthlyY[t.dateCreated.month - 1] += t.amount.abs();
+
+        // Prepare Spots
+        final List<FlSpot> spotsX = [];
+        final List<FlSpot> spotsY = [];
+
+        for (int i = 0; i < 12; i++) {
+          spotsX.add(FlSpot(i.toDouble(), monthlyX[i]));
+          spotsY.add(FlSpot(i.toDouble(), monthlyY[i]));
+        }
+
+        // Colors
+        final colorX = Theme.of(context).colorScheme.secondary.withOpacity(0.5);
+        final colorY = Theme.of(context).colorScheme.primary;
+
+        // Max Y for scale (add padding)
+        double maxY = 0;
+        for (var v in monthlyX) if (v > maxY) maxY = v;
+        for (var v in monthlyY) if (v > maxY) maxY = v;
+        if (maxY == 0) maxY = 100;
+        maxY *= 1.2;
+
+        return AspectRatio(
+          aspectRatio: 1.7,
+          child: Container(
+            margin: EdgeInsets.symmetric(horizontal: 10),
+            padding: EdgeInsets.only(top: 10, right: 20, left: 5, bottom: 5),
+            decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(15),
+                boxShadow: [
+                  BoxShadow(
+                    color: Theme.of(context).shadowColor.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: Offset(0, 5),
+                  )
+                ]),
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: maxY / 5,
+                  getDrawingHorizontalLine: (value) {
+                    return FlLine(
+                      color: Theme.of(context).dividerColor.withOpacity(0.1),
+                      strokeWidth: 1,
+                    );
+                  },
+                ),
+                titlesData: FlTitlesData(
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        int index = value.toInt();
+                        if (index < 0 || index > 11) return SizedBox.shrink();
+                        try {
+                          String month =
+                              DateFormat.MMM(context.locale.toString())
+                                  .format(DateTime(2000, index + 1));
+                          return Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text(month,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurface
+                                        .withOpacity(0.5))),
+                          );
+                        } catch (e) {
+                          return SizedBox.shrink();
+                        }
+                      },
+                    ),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: false,
+                    ),
+                  ),
+                  topTitles:
+                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles:
+                      AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                ),
+                borderData: FlBorderData(show: false),
+                minX: 0,
+                maxX: 11,
+                minY: 0,
+                maxY: maxY,
+                lineBarsData: [
+                  // Year X
+                  LineChartBarData(
+                    spots: spotsX,
+                    isCurved: true,
+                    color: colorX,
+                    barWidth: 2,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                    dashArray: [5, 5],
+                  ),
+                  // Year Y
+                  LineChartBarData(
+                    spots: spotsY,
+                    isCurved: true,
+                    color: colorY,
+                    barWidth: 3,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                        show: true,
+                        getDotPainter: (spot, percent, barData, index) {
+                          return FlDotCirclePainter(
+                            radius: 3,
+                            color: colorY,
+                            strokeWidth: 2,
+                            strokeColor: Theme.of(context).colorScheme.surface,
+                          );
+                        }),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: colorY.withOpacity(0.1),
+                      gradient: LinearGradient(
+                        colors: [
+                          colorY.withOpacity(0.2),
+                          colorY.withOpacity(0.0)
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                    ),
+                  ),
+                ],
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => Theme.of(context).cardColor,
+                    tooltipRoundedRadius: 8,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        bool isYearY = spot.barIndex == 1;
+                        return LineTooltipItem(
+                          "${isYearY ? yearY : yearX}: " +
+                              convertToMoney(
+                                  Provider.of<AllWallets>(context,
+                                      listen: false),
+                                  spot.y),
+                          TextStyle(
+                            color: isYearY ? colorY : colorX.withOpacity(1),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 // Widget to show a chip when there are transactions directly on the parent category
